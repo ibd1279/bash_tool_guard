@@ -1,7 +1,7 @@
 # bash-tool-guard
 
-A Claude Code `PreToolUse` hook that intercepts every Bash tool call before it
-executes and applies a three-stage safety pipeline:
+Claude Code `PreToolUse` and `PostToolUse` hooks that intercept every Bash tool
+call. The pre-hook applies a three-stage safety pipeline before execution:
 
 1. **Deny** — regex patterns in `~/.local/etc/btg.deny` block commands
    immediately (e.g. `curl .* \| bash`).
@@ -15,6 +15,9 @@ executes and applies a three-stage safety pipeline:
 
 Commands that escape all three stages produce an `ask` decision — Claude Code
 pauses and shows the reason to the user.
+
+The post-hook logs every command that executes successfully to
+`btg.post.log.jsonl`, which feeds the `btg suggest` and `btg patterns` commands.
 
 ## Prerequisites
 
@@ -31,7 +34,7 @@ zig build
 
 ## Installation
 
-Register the hook in `~/.claude/settings.json`:
+Register both hooks in `~/.claude/settings.json`:
 
 ```json
 {
@@ -42,7 +45,18 @@ Register the hook in `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/zig-out/bin/bash_tool_guard"
+            "command": "/path/to/bash_tool_guard"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/bash_tool_guard_post"
           }
         ]
       }
@@ -103,14 +117,15 @@ your ask history (see below).
 Run with no arguments to print all views.
 
 ```
-btg [ask] [stale-allow] [suggest] [flush] [init] [allow <pat>] [deny <pat>]
+btg [ask] [stale-allow] [suggest] [patterns <word>] [flush] [init] [allow <pat>] [deny <pat>]
 ```
 
 | Command | Description |
 |---------|-------------|
 | `ask` | Commands vibe-evaluated most often, not in any allow list. Annotated with `[ask: N]` when some hits were blocked, `[project]` if all occurrences came from one repo. |
 | `stale-allow` | Allow patterns in `~/.local/etc/btg.allow` with zero recorded invocations. Safe to remove. |
-| `suggest` | Write `Bash(cmd *)` entries for every command seen in the vibe log for the current project into `.claude/settings.local.json`. Idempotent. |
+| `suggest` | Write `Bash(cmd *)` entries for every command seen in the post log for the current project into `.claude/settings.local.json`. Idempotent. |
+| `patterns <word>` | Feed logged commands starting with `<word>` to vibe and print suggested ERE allow patterns for `~/.local/etc/btg.allow`. |
 | `flush` | Delete all log files under `~/.local/var/`. |
 | `init` | Create `~/.local/etc/btg.allow` and `btg.deny` with starter patterns (skips files that already exist). |
 | `allow <pattern>` | Append an ERE pattern to `~/.local/etc/btg.allow`. |
@@ -181,6 +196,7 @@ All logs live under `~/.local/var/`:
 |------|---------|
 | `btg.allow.log.jsonl` | Commands matched by allow list (fast-path) |
 | `btg.vibe.log.jsonl` | All vibe-evaluated commands; `reason` is `"vibe: safe"` or the ask explanation |
+| `btg.post.log.jsonl` | Commands that executed successfully (post-hook); feeds `suggest` and `patterns` |
 
 Each line is a JSON object: `{"cmd":"...","reason":"...","ts":"...","project":"..."}`.
 
