@@ -56,7 +56,7 @@ Register both hooks in `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/bash_tool_guard_post"
+            "command": "/path/to/bash_tool_guard"
           }
         ]
       }

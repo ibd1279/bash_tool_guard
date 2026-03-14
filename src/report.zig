@@ -113,6 +113,7 @@ const STARTER_ALLOW =
     \\^wc\b
     \\^diff\b
     \\^jq\b
+    \\^sleep\b
 ;
 
 const STARTER_DENY =
@@ -128,7 +129,7 @@ const STARTER_DENY =
 // Init
 // ---------------------------------------------------------------------------
 
-pub fn runInit(allocator: std.mem.Allocator, home: []const u8) !void {
+pub fn runInit(allocator: std.mem.Allocator, home: []const u8, exe_path: []const u8) !void {
     var buf: [4096]u8 = undefined;
     var stdout_bw = std.fs.File.stdout().writer(&buf);
     const out = &stdout_bw.interface;
@@ -178,11 +179,11 @@ pub fn runInit(allocator: std.mem.Allocator, home: []const u8) !void {
     try out.print("\nAdd hooks to ~/.claude/settings.json:\n", .{});
     try out.print(
         \\  "hooks": {{
-        \\    "PreToolUse": [{{ "matcher": "Bash", "hooks": [{{ "type": "command", "command": "/path/to/bash_tool_guard" }}] }}],
-        \\    "PostToolUse": [{{ "matcher": "Bash", "hooks": [{{ "type": "command", "command": "/path/to/bash_tool_guard_post" }}] }}]
+        \\    "PreToolUse": [{{ "matcher": "Bash", "hooks": [{{ "type": "command", "command": "{s}" }}] }}],
+        \\    "PostToolUse": [{{ "matcher": "Bash", "hooks": [{{ "type": "command", "command": "{s}" }}] }}]
         \\  }}
         \\
-    , .{});
+    , .{exe_path, exe_path});
     try out.flush();
 }
 
@@ -1120,7 +1121,9 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, sel, "suggest")) {
             try runSuggest(allocator, home);
         } else if (std.mem.eql(u8, sel, "init")) {
-            try runInit(allocator, home);
+            const exe_path = try std.fs.selfExePathAlloc(allocator);
+            defer allocator.free(exe_path);
+            try runInit(allocator, home, exe_path);
         } else if (std.mem.eql(u8, sel, "patterns")) {
             i += 1;
             if (i >= selectors.len) {

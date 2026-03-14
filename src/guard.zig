@@ -296,14 +296,18 @@ pub const WrapperSplit = struct {
 /// wrapper or if the wrapper has no sub-command following it.
 ///
 /// Supported wrappers and what they consume before the sub-command:
-///   nohup   — no own args
-///   time    — optional flags (e.g. -p)
-///   env     — flags (some with values) + VAR=value assignments
-///   timeout — flags (some with values) + one positional DURATION argument
-///   nice    — optional -n increment flag, then sub-command
-///   bash    — optional behavior flags + optional script file (implicit; -c returns null)
-///   sh      — optional behavior flags + optional script file (implicit; -c returns null)
-///   zsh     — optional behavior flags + optional script file (implicit; -c returns null)
+///   nohup    — no own args
+///   time     — optional flags (e.g. -p)
+///   env      — flags (some with values) + VAR=value assignments
+///   timeout  — flags (some with values) + one positional DURATION argument
+///   nice     — optional -n increment flag, then sub-command
+///   bash     — optional behavior flags + optional script file (implicit; -c returns null)
+///   sh       — optional behavior flags + optional script file (implicit; -c returns null)
+///   zsh      — optional behavior flags + optional script file (implicit; -c returns null)
+///   jexec    — flags (some with values) + one positional jail id/name, then sub-command
+///   doas     — flags (some with values) + optional --, then sub-command
+///   bastille — global flags + 'cmd' subcommand + cmd flags + TARGET, then sub-command
+///   pot      — 'exec' subcommand + flags (-e/-u/-U/-p take values), then sub-command
 pub fn splitWrapper(seg: []const u8) ?WrapperSplit {
     const first_end = skipTok(seg, 0);
     if (first_end == 0) return null;
@@ -442,6 +446,123 @@ pub fn splitWrapper(seg: []const u8) ?WrapperSplit {
             .inner_part = seg[inner_start_shell..],
             .implicit = true,
         };
+    } else if (std.mem.eql(u8, first, "jexec")) {
+        // jexec [-l] [-d dir] [-u user | -U user] jail COMMAND [ARG]...
+        while (true) {
+            i = skipWs(seg, i);
+            if (i >= seg.len) return null;
+            if (seg[i] != '-') break;
+            const tok_start = i;
+            i = skipTok(seg, i);
+            const tok = seg[tok_start..i];
+            // -d, -u, -U take a separate value token
+            const takes_val = std.mem.indexOfScalar(u8, tok, '=') == null and
+                (std.mem.eql(u8, tok, "-d") or
+                std.mem.eql(u8, tok, "-u") or
+                std.mem.eql(u8, tok, "-U"));
+            if (takes_val) {
+                i = skipWs(seg, i);
+                i = skipTok(seg, i);
+            }
+        }
+        // Skip jail id/name (one positional)
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
+        i = skipTok(seg, i);
+        // Now at sub-command
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
+    } else if (std.mem.eql(u8, first, "doas")) {
+        // doas [-nSs] [-a style] [-C config] [-u user] [--] COMMAND [ARG]...
+        while (true) {
+            i = skipWs(seg, i);
+            if (i >= seg.len) return null;
+            if (seg[i] != '-') break;
+            const tok_start = i;
+            i = skipTok(seg, i);
+            const tok = seg[tok_start..i];
+            if (std.mem.eql(u8, tok, "--")) break; // end of options
+            // -a, -C, -u take a separate value token
+            const takes_val = std.mem.indexOfScalar(u8, tok, '=') == null and
+                (std.mem.eql(u8, tok, "-a") or
+                std.mem.eql(u8, tok, "-C") or
+                std.mem.eql(u8, tok, "-u"));
+            if (takes_val) {
+                i = skipWs(seg, i);
+                i = skipTok(seg, i);
+            }
+        }
+        // Skip whitespace after flags or after consuming '--'
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
+    } else if (std.mem.eql(u8, first, "bastille")) {
+        // bastille [-vh] [-c file] cmd [-ax] TARGET COMMAND [ARG]...
+        // Only the 'cmd' subcommand executes arbitrary commands inside a jail;
+        // other subcommands (start, stop, pkg, …) are not transparent wrappers.
+        // Skip global flags
+        while (true) {
+            i = skipWs(seg, i);
+            if (i >= seg.len) return null;
+            if (seg[i] != '-') break;
+            const tok_start = i;
+            i = skipTok(seg, i);
+            const tok = seg[tok_start..i];
+            // -c/--config takes a separate value token
+            const takes_val = std.mem.indexOfScalar(u8, tok, '=') == null and
+                (std.mem.eql(u8, tok, "-c") or
+                std.mem.eql(u8, tok, "--config"));
+            if (takes_val) {
+                i = skipWs(seg, i);
+                i = skipTok(seg, i);
+            }
+        }
+        // Require 'cmd' subcommand
+        const bastille_sub_start = i;
+        i = skipTok(seg, i);
+        if (!std.mem.eql(u8, seg[bastille_sub_start..i], "cmd")) return null;
+        // Skip cmd-level flags (-a/--auto, -x/--debug — all boolean)
+        while (true) {
+            i = skipWs(seg, i);
+            if (i >= seg.len) return null;
+            if (seg[i] != '-') break;
+            i = skipTok(seg, i);
+        }
+        // Skip TARGET (one positional)
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
+        i = skipTok(seg, i);
+        // Now at sub-command
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
+    } else if (std.mem.eql(u8, first, "pot")) {
+        // pot exec [-hvdt] [-e var=value] [-u user] [-U user] -p pot COMMAND [ARG]...
+        // Only the 'exec' subcommand runs arbitrary commands inside a pot.
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
+        const pot_sub_start = i;
+        i = skipTok(seg, i);
+        if (!std.mem.eql(u8, seg[pot_sub_start..i], "exec")) return null;
+        // Skip flags; -e, -u, -U, -p each take a separate value token
+        while (true) {
+            i = skipWs(seg, i);
+            if (i >= seg.len) return null;
+            if (seg[i] != '-') break;
+            const tok_start = i;
+            i = skipTok(seg, i);
+            const tok = seg[tok_start..i];
+            const takes_val = std.mem.indexOfScalar(u8, tok, '=') == null and
+                (std.mem.eql(u8, tok, "-e") or
+                std.mem.eql(u8, tok, "-u") or
+                std.mem.eql(u8, tok, "-U") or
+                std.mem.eql(u8, tok, "-p"));
+            if (takes_val) {
+                i = skipWs(seg, i);
+                i = skipTok(seg, i);
+            }
+        }
+        // Now at COMMAND
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
     } else {
         return null;
     }
@@ -944,6 +1065,82 @@ test "splitWrapper: zsh script.sh is implicit wrapper" {
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("script.sh", result.?.inner_part);
     try std.testing.expect(result.?.implicit == true);
+}
+
+test "splitWrapper: jexec jail splits correctly" {
+    const result = splitWrapper("jexec myjail git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("jexec myjail", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: jexec -u user jail splits correctly" {
+    const result = splitWrapper("jexec -u root myjail git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("jexec -u root myjail", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: jexec alone has no sub-command" {
+    try std.testing.expect(splitWrapper("jexec myjail") == null);
+}
+
+test "splitWrapper: doas splits correctly" {
+    const result = splitWrapper("doas git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("doas", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: doas -u user splits correctly" {
+    const result = splitWrapper("doas -u root git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("doas -u root", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: doas -- splits correctly" {
+    const result = splitWrapper("doas -- git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("doas --", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: doas alone has no sub-command" {
+    try std.testing.expect(splitWrapper("doas") == null);
+}
+
+test "splitWrapper: bastille cmd splits correctly" {
+    const result = splitWrapper("bastille cmd myjail git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("bastille cmd myjail", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: bastille cmd with subopts splits correctly" {
+    const result = splitWrapper("bastille cmd -a myjail git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("bastille cmd -a myjail", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: bastille non-cmd subcommand returns null" {
+    try std.testing.expect(splitWrapper("bastille start myjail") == null);
+}
+
+test "splitWrapper: pot exec -p potname splits correctly" {
+    const result = splitWrapper("pot exec -p mypot git status");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("pot exec -p mypot", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("git status", result.?.inner_part);
+}
+
+test "splitWrapper: pot exec -p potname alone returns null" {
+    try std.testing.expect(splitWrapper("pot exec -p mypot") == null);
+}
+
+test "splitWrapper: pot term returns null (not an exec wrapper)" {
+    try std.testing.expect(splitWrapper("pot term -p mypot") == null);
 }
 
 test "expandWrappers: bash script.sh yields only script.sh (implicit)" {
