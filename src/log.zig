@@ -1,5 +1,55 @@
 const std = @import("std");
 
+/// Sanitize environment variable values in a command string by replacing sensitive
+/// values with 'x'. Patterns like `VAR=secret_value` become `VAR=x` to avoid
+/// logging API keys and other sensitive data.
+/// Matches: IDENTIFIER=non_whitespace (e.g., API_KEY=abc123, PASSWD=xyz)
+/// Caller owns the returned slice.
+pub fn sanitizeEnvVars(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        // Check if we're at the start of an env var assignment (after boundary)
+        const is_boundary = i == 0 or input[i - 1] == ' ' or input[i - 1] == '\t';
+        if (is_boundary and i < input.len and isEnvVarStart(input[i])) {
+            // Found potential env var start
+            const var_start = i;
+            // Consume IDENTIFIER part
+            while (i < input.len and isEnvVarChar(input[i])) : (i += 1) {}
+            // Check for '=' after identifier
+            if (i < input.len and input[i] == '=') {
+                // This is an env var assignment: append IDENTIFIER=x
+                try out.appendSlice(allocator, input[var_start..i]);
+                try out.append(allocator, '=');
+                try out.append(allocator, 'x');
+                i += 1; // skip the '='
+                // Skip the original value (everything until next whitespace or end)
+                while (i < input.len and input[i] != ' ' and input[i] != '\t') : (i += 1) {}
+            } else {
+                // Not an env var, just copy what we read
+                try out.appendSlice(allocator, input[var_start..i]);
+            }
+        } else {
+            try out.append(allocator, input[i]);
+            i += 1;
+        }
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+/// Check if character can start an environment variable name (uppercase letter or underscore)
+inline fn isEnvVarStart(ch: u8) bool {
+    return (ch >= 'A' and ch <= 'Z') or ch == '_';
+}
+
+/// Check if character is valid in environment variable name
+inline fn isEnvVarChar(ch: u8) bool {
+    return (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_';
+}
+
 /// Escape a string for embedding inside a JSON string value in an NDJSON log.
 /// Newline and carriage-return characters are replaced with a space so that
 /// each log entry stays on a single line.  Tab characters are also replaced
@@ -24,6 +74,48 @@ pub fn jsonEscape(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test "sanitizeEnvVars: simple API key replacement" {
+    const allocator = std.testing.allocator;
+    const result = try sanitizeEnvVars(allocator, "API_KEY=secret123 curl example.com");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("API_KEY=x curl example.com", result);
+}
+
+test "sanitizeEnvVars: multiple env vars" {
+    const allocator = std.testing.allocator;
+    const result = try sanitizeEnvVars(allocator, "USER=admin PASSWORD=pass123 DB_HOST=localhost");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("USER=x PASSWORD=x DB_HOST=x", result);
+}
+
+test "sanitizeEnvVars: env command with assignment" {
+    const allocator = std.testing.allocator;
+    const result = try sanitizeEnvVars(allocator, "env API_TOKEN=abc123xyz git push");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("env API_TOKEN=x git push", result);
+}
+
+test "sanitizeEnvVars: preserves non-env-var patterns" {
+    const allocator = std.testing.allocator;
+    const result = try sanitizeEnvVars(allocator, "grep foo=bar file.txt");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("grep foo=bar file.txt", result);
+}
+
+test "sanitizeEnvVars: no env vars unchanged" {
+    const allocator = std.testing.allocator;
+    const result = try sanitizeEnvVars(allocator, "git status");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("git status", result);
+}
+
+test "sanitizeEnvVars: underscore prefixed var" {
+    const allocator = std.testing.allocator;
+    const result = try sanitizeEnvVars(allocator, "_SECRET=mysecret npm install");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("_SECRET=x npm install", result);
+}
 
 test "jsonEscape: newline becomes space" {
     const allocator = std.testing.allocator;
@@ -99,7 +191,11 @@ pub fn appendEntry(allocator: std.mem.Allocator, path: []const u8, cmd: []const 
     const ts = try formatTimestamp(allocator, std.time.timestamp());
     defer allocator.free(ts);
 
-    const cmd_escaped = try jsonEscape(allocator, cmd);
+    // Sanitize environment variable values to avoid logging API keys, passwords, etc.
+    const cmd_sanitized = try sanitizeEnvVars(allocator, cmd);
+    defer allocator.free(cmd_sanitized);
+
+    const cmd_escaped = try jsonEscape(allocator, cmd_sanitized);
     defer allocator.free(cmd_escaped);
 
     const reason_escaped = try jsonEscape(allocator, reason);
