@@ -1,3 +1,9 @@
+---
+name: add-wrapper
+description: Generate a splitWrapper case in src/guard.zig for a wrapper command
+type: skill
+---
+
 # add-wrapper
 
 Generate a `splitWrapper` case in `src/guard.zig` for a new transparent wrapper command.

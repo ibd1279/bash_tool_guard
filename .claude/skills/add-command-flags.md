@@ -1,3 +1,9 @@
+---
+name: add-command-flags
+description: Generate flag-safety rules in src/flags.zig for a command
+type: skill
+---
+
 # add-command-flags
 
 Generate flag-safety rules in `src/flags.zig` for a command (or subcommand).
