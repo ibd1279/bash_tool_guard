@@ -510,6 +510,7 @@ pub const WrapperSplit = struct {
 ///   doas     — flags (some with values) + optional --, then sub-command
 ///   bastille — global flags + 'cmd' subcommand + cmd flags + TARGET, then sub-command
 ///   pot      — 'exec' subcommand + flags (-e/-u/-U/-p take values), then sub-command
+///   xargs    — flags (some with values), then sub-command
 pub fn splitWrapper(seg: []const u8) ?WrapperSplit {
     const first_end = skipTok(seg, 0);
     if (first_end == 0) return null;
@@ -763,6 +764,35 @@ pub fn splitWrapper(seg: []const u8) ?WrapperSplit {
             }
         }
         // Now at COMMAND
+        i = skipWs(seg, i);
+        if (i >= seg.len) return null;
+    } else if (std.mem.eql(u8, first, "xargs")) {
+        // xargs [flags] [utility [argument ...]]
+        // Skip flags (some consume a value token)
+        while (true) {
+            i = skipWs(seg, i);
+            if (i >= seg.len) return null;
+            if (seg[i] != '-') break;
+            const tok_start = i;
+            i = skipTok(seg, i);
+            const tok = seg[tok_start..i];
+            // Flags that take a separate value token
+            const takes_val = std.mem.indexOfScalar(u8, tok, '=') == null and
+                (std.mem.eql(u8, tok, "-E") or
+                std.mem.eql(u8, tok, "-I") or
+                std.mem.eql(u8, tok, "-J") or
+                std.mem.eql(u8, tok, "-L") or
+                std.mem.eql(u8, tok, "-n") or
+                std.mem.eql(u8, tok, "-P") or
+                std.mem.eql(u8, tok, "-R") or
+                std.mem.eql(u8, tok, "-S") or
+                std.mem.eql(u8, tok, "-s"));
+            if (takes_val) {
+                i = skipWs(seg, i);
+                i = skipTok(seg, i);
+            }
+        }
+        // Now at the utility (command) or end of input
         i = skipWs(seg, i);
         if (i >= seg.len) return null;
     } else {
@@ -1343,6 +1373,31 @@ test "splitWrapper: pot exec -p potname alone returns null" {
 
 test "splitWrapper: pot term returns null (not an exec wrapper)" {
     try std.testing.expect(splitWrapper("pot term -p mypot") == null);
+}
+
+test "splitWrapper: xargs basic split" {
+    const result = splitWrapper("xargs rm");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("xargs", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("rm", result.?.inner_part);
+}
+
+test "splitWrapper: xargs with flags splits correctly" {
+    const result = splitWrapper("xargs -0 -n 10 curl");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("xargs -0 -n 10", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("curl", result.?.inner_part);
+}
+
+test "splitWrapper: xargs -I with replacement string splits correctly" {
+    const result = splitWrapper("xargs -I {} sh -c 'cmd {}' +");
+    try std.testing.expect(result != null);
+    try std.testing.expectEqualStrings("xargs -I {}", result.?.wrapper_part);
+    try std.testing.expectEqualStrings("sh -c 'cmd {}' +", result.?.inner_part);
+}
+
+test "splitWrapper: xargs alone returns null" {
+    try std.testing.expect(splitWrapper("xargs") == null);
 }
 
 test "expandWrappers: bash script.sh yields only script.sh (implicit)" {
