@@ -1,5 +1,15 @@
 const std = @import("std");
 
+/// Check if character can start an environment variable name (uppercase letter or underscore)
+inline fn isEnvVarStart(ch: u8) bool {
+    return (ch >= 'A' and ch <= 'Z') or ch == '_';
+}
+
+/// Check if character is valid in environment variable name (uppercase, digits, underscore)
+inline fn isEnvVarChar(ch: u8) bool {
+    return (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_';
+}
+
 /// Remove 'single' and "double" quoted substrings from input.
 /// Returns newly allocated string.
 pub fn stripQuotes(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
@@ -26,6 +36,159 @@ pub fn stripQuotes(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     }
 
     return result.toOwnedSlice(allocator);
+}
+
+/// Sanitize command for logging: blank env var values, quoted strings, and heredoc bodies.
+/// - Environment variables: VAR=secret → VAR=x
+/// - Single-quoted strings: '...' → ''
+/// - Double-quoted strings: "..." → ""
+/// - Heredoc bodies: blanked with spaces
+/// This prevents API keys, passwords, and sensitive data from leaking into logs.
+pub fn sanitizeCommand(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out = try allocator.dupe(u8, input);
+    errdefer allocator.free(out);
+    var i: usize = 0;
+
+    while (i < out.len) {
+        // Handle heredocs first (before quoted strings, since <<'MARKER' has quotes as syntax).
+        // (<<, <<-, <<'MARKER', <<"MARKER", <<\MARKER).
+        if (i + 1 < out.len and out[i] == '<' and out[i + 1] == '<') {
+            var j = i + 2;
+            if (j < out.len and out[j] == '-') j += 1; // optional -
+            while (j < out.len and (out[j] == ' ' or out[j] == '\t')) : (j += 1) {}
+
+            // Extract marker.
+            var marker_buf: [128]u8 = undefined;
+            var mlen: usize = 0;
+            if (j < out.len and (out[j] == '\'' or out[j] == '"')) {
+                const q = out[j];
+                j += 1;
+                while (j < out.len and out[j] != q and mlen < marker_buf.len) {
+                    marker_buf[mlen] = out[j];
+                    mlen += 1;
+                    j += 1;
+                }
+                if (j < out.len) j += 1;
+            } else if (j < out.len and out[j] == '\\') {
+                j += 1;
+                while (j < out.len and out[j] != ' ' and out[j] != '\t' and
+                    out[j] != '\n' and mlen < marker_buf.len)
+                {
+                    marker_buf[mlen] = out[j];
+                    mlen += 1;
+                    j += 1;
+                }
+            } else {
+                while (j < out.len and out[j] != ' ' and out[j] != '\t' and
+                    out[j] != '\n' and out[j] != ')' and mlen < marker_buf.len)
+                {
+                    marker_buf[mlen] = out[j];
+                    mlen += 1;
+                    j += 1;
+                }
+            }
+
+            if (mlen > 0) {
+                const marker = marker_buf[0..mlen];
+                // Check if there's non-whitespace content on the same line (inline heredoc).
+                var has_inline_content = false;
+                {
+                    var k = j;
+                    while (k < out.len and out[k] != '\n') : (k += 1) {
+                        if (out[k] != ' ' and out[k] != '\t') {
+                            has_inline_content = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!has_inline_content) {
+                    // Normal heredoc: skip to end of delimiter line first.
+                    while (j < out.len and out[j] != '\n') : (j += 1) {}
+                    if (j < out.len) j += 1;
+                }
+
+                // Blank content until closing marker.
+                while (j < out.len) {
+                    var ls = j;
+                    while (ls < out.len and out[ls] == '\t') : (ls += 1) {}
+                    if (ls + marker.len <= out.len and
+                        std.mem.eql(u8, out[ls .. ls + marker.len], marker))
+                    {
+                        const after = ls + marker.len;
+                        if (after >= out.len or out[after] == '\n' or out[after] == '\r' or
+                            out[after] == ')' or out[after] == ' ')
+                        {
+                            j = after;
+                            while (j < out.len and out[j] != '\n') : (j += 1) {}
+                            if (j < out.len) j += 1;
+                            break;
+                        }
+                    }
+                    // Blank content, preserve newlines.
+                    if (out[j] != '\n') out[j] = ' ';
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+
+        // Handle single-quoted strings.
+        if (out[i] == '\'') {
+            i += 1;
+            while (i < out.len and out[i] != '\'') {
+                out[i] = ' ';
+                i += 1;
+            }
+            if (i < out.len) i += 1; // skip closing quote
+            continue;
+        }
+
+        // Handle double-quoted strings.
+        if (out[i] == '"') {
+            i += 1;
+            while (i < out.len and out[i] != '"') {
+                if (out[i] == '\\' and i + 1 < out.len) {
+                    out[i] = ' ';
+                    i += 1;
+                    out[i] = ' ';
+                    i += 1;
+                } else {
+                    out[i] = ' ';
+                    i += 1;
+                }
+            }
+            if (i < out.len) i += 1; // skip closing quote
+            continue;
+        }
+
+        // Handle environment variable assignments: VAR=value → VAR=x
+        // Only match at word boundaries (start, after space/tab)
+        const is_boundary = i == 0 or out[i - 1] == ' ' or out[i - 1] == '\t';
+        if (is_boundary and isEnvVarStart(out[i])) {
+            // Consume IDENTIFIER part
+            while (i < out.len and isEnvVarChar(out[i])) : (i += 1) {}
+            // Check for '=' after identifier
+            if (i < out.len and out[i] == '=') {
+                // This is an env var: keep VAR= but blank the value
+                i += 1; // skip the '='
+                out[i] = 'x'; // replace first char of value with 'x'
+                i += 1;
+                // Skip/blank rest of value (everything until next whitespace or end)
+                while (i < out.len and out[i] != ' ' and out[i] != '\t') {
+                    out[i] = ' ';
+                    i += 1;
+                }
+                continue;
+            }
+            // Not an env var, continue normally
+        }
+
+        i += 1;
+    }
+
+    return out;
 }
 
 /// Returns true if command contains $( or backtick outside single quotes or
@@ -138,32 +301,71 @@ pub fn stripHeredocBodies(allocator: std.mem.Allocator, cmd: []const u8) ![]u8 {
         if (mlen == 0) continue;
         const marker = marker_buf[0..mlen];
 
-        // Skip to end of intro line (the <<'EOF' line itself).
-        while (i < out.len and out[i] != '\n') : (i += 1) {}
-        if (i < out.len) i += 1;
-
-        // Blank body lines until the closing marker.
-        while (i < out.len) {
-            var ls = i;
-            while (ls < out.len and out[ls] == '\t') : (ls += 1) {} // skip leading tabs (<<-)
-            if (ls + marker.len <= out.len and
-                std.mem.eql(u8, out[ls .. ls + marker.len], marker))
-            {
-                const after = ls + marker.len;
-                if (after >= out.len or out[after] == '\n' or out[after] == '\r' or
-                    out[after] == ')' or out[after] == ' ')
-                {
-                    i = after;
-                    while (i < out.len and out[i] != '\n') : (i += 1) {}
-                    if (i < out.len) i += 1;
+        // Check if there's non-whitespace content on the same line (inline heredoc).
+        var has_inline_content = false;
+        {
+            var j = i;
+            while (j < out.len and out[j] != '\n') : (j += 1) {
+                if (out[j] != ' ' and out[j] != '\t') {
+                    has_inline_content = true;
                     break;
                 }
             }
-            while (i < out.len and out[i] != '\n') {
-                out[i] = ' ';
+        }
+
+        if (has_inline_content) {
+            // Inline heredoc: search for marker on same line or next lines.
+            // Blank content until marker found.
+            while (i < out.len) {
+                // Check if marker starts at this position (optionally preceded by tabs).
+                var ls = i;
+                while (ls < out.len and out[ls] == '\t') : (ls += 1) {}
+                if (ls + marker.len <= out.len and
+                    std.mem.eql(u8, out[ls .. ls + marker.len], marker))
+                {
+                    const after = ls + marker.len;
+                    if (after >= out.len or out[after] == '\n' or out[after] == '\r' or
+                        out[after] == ')' or out[after] == ' ')
+                    {
+                        i = after;
+                        while (i < out.len and out[i] != '\n') : (i += 1) {}
+                        if (i < out.len) i += 1;
+                        break;
+                    }
+                }
+                // Not a marker line; blank this character.
+                if (out[i] != '\n') out[i] = ' ';
                 i += 1;
             }
-            if (i < out.len) i += 1; // preserve \n
+        } else {
+            // Normal heredoc: content starts on next line.
+            // Skip to end of intro line (the <<'EOF' line itself).
+            while (i < out.len and out[i] != '\n') : (i += 1) {}
+            if (i < out.len) i += 1;
+
+            // Blank body lines until the closing marker.
+            while (i < out.len) {
+                var ls = i;
+                while (ls < out.len and out[ls] == '\t') : (ls += 1) {} // skip leading tabs (<<-)
+                if (ls + marker.len <= out.len and
+                    std.mem.eql(u8, out[ls .. ls + marker.len], marker))
+                {
+                    const after = ls + marker.len;
+                    if (after >= out.len or out[after] == '\n' or out[after] == '\r' or
+                        out[after] == ')' or out[after] == ' ')
+                    {
+                        i = after;
+                        while (i < out.len and out[i] != '\n') : (i += 1) {}
+                        if (i < out.len) i += 1;
+                        break;
+                    }
+                }
+                while (i < out.len and out[i] != '\n') {
+                    out[i] = ' ';
+                    i += 1;
+                }
+                if (i < out.len) i += 1; // preserve \n
+            }
         }
     }
     return out;
@@ -1390,4 +1592,15 @@ test "stripHeredocBodies: double-quoted marker, body blanked" {
     const result = try stripHeredocBodies(allocator, input);
     defer allocator.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "body line") == null);
+}
+
+test "sanitizeCommand: inline heredoc" {
+    const allocator = std.testing.allocator;
+    const input = "zig <<'EOF' content EOF";
+    const result = try sanitizeCommand(allocator, input);
+    defer allocator.free(result);
+    std.debug.print("Input:  {s}\n", .{input});
+    std.debug.print("Result: {s}\n", .{result});
+    // The content between <<'EOF' and EOF should be blanked
+    try std.testing.expect(std.mem.indexOf(u8, result, "content") == null);
 }

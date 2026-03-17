@@ -191,11 +191,8 @@ pub fn appendEntry(allocator: std.mem.Allocator, path: []const u8, cmd: []const 
     const ts = try formatTimestamp(allocator, std.time.timestamp());
     defer allocator.free(ts);
 
-    // Sanitize environment variable values to avoid logging API keys, passwords, etc.
-    const cmd_sanitized = try sanitizeEnvVars(allocator, cmd);
-    defer allocator.free(cmd_sanitized);
-
-    const cmd_escaped = try jsonEscape(allocator, cmd_sanitized);
+    // Command is already sanitized by the hook (env vars, quotes, heredocs are blanked).
+    const cmd_escaped = try jsonEscape(allocator, cmd);
     defer allocator.free(cmd_escaped);
 
     const reason_escaped = try jsonEscape(allocator, reason);

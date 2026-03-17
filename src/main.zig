@@ -1,4 +1,5 @@
 const std = @import("std");
+const guard = @import("guard.zig");
 const patterns = @import("patterns.zig");
 const vibe = @import("vibe.zig");
 const log_mod = @import("log.zig");
@@ -61,6 +62,10 @@ pub fn main() !void {
         }
     };
     if (command.len == 0) std.process.exit(0);
+
+    // Sanitize command: blank env var values, quoted strings, and heredoc bodies.
+    const command_sanitized = try guard.sanitizeCommand(allocator, command);
+    defer allocator.free(command_sanitized);
 
     // Build shared paths.
     const allow_file = try std.fs.path.join(allocator, &.{ home, ".local/etc/btg.allow" });
@@ -137,11 +142,11 @@ pub fn main() !void {
             }
         }
 
-        const decision = try pipeline.classifyForPost(allocator, command, allow_pats);
+        const decision = try pipeline.classifyForPost(allocator, command_sanitized, allow_pats);
         if (decision == .log) {
             const post_log = try std.fs.path.join(allocator, &.{ home, ".local/var/btg.post.log.jsonl" });
             defer allocator.free(post_log);
-            log_mod.appendEntry(allocator, post_log, command, "post: ran", maybe_project_root) catch {};
+            log_mod.appendEntry(allocator, post_log, command_sanitized, "post: ran", maybe_project_root) catch {};
         }
 
         // PostToolUse hooks must produce no stdout output.
@@ -164,21 +169,21 @@ pub fn main() !void {
     const allow_log = try std.fs.path.join(allocator, &.{ home, ".local/var/btg.allow.log.jsonl" });
     defer allocator.free(allow_log);
 
-    const decision = try pipeline.evaluate(allocator, command, deny_pats, allow_pats, vibe.evaluate);
+    const decision = try pipeline.evaluate(allocator, command_sanitized, deny_pats, allow_pats, vibe.evaluate);
     defer decision.deinit(allocator);
 
     switch (decision) {
         .allow_fast => {
-            log_mod.appendEntry(allocator, allow_log, command, "", maybe_project_root) catch {};
+            log_mod.appendEntry(allocator, allow_log, command_sanitized, "", maybe_project_root) catch {};
             try output.allow();
         },
         .allow_vibe => {
-            log_mod.appendEntry(allocator, vibe_log, command, "vibe: safe", maybe_project_root) catch {};
+            log_mod.appendEntry(allocator, vibe_log, command_sanitized, "vibe: safe", maybe_project_root) catch {};
             try output.allow();
         },
         .deny => |reason| try output.deny(allocator, reason),
         .ask => |reason| {
-            log_mod.appendEntry(allocator, vibe_log, command, reason, maybe_project_root) catch {};
+            log_mod.appendEntry(allocator, vibe_log, command_sanitized, reason, maybe_project_root) catch {};
             try output.ask(allocator, reason);
         },
     }

@@ -325,9 +325,7 @@ pub fn runAskReport(allocator: std.mem.Allocator, home: []const u8) !void {
             break :blk false;
         };
 
-        const stripped_cmd = try guard.stripHeredocBodies(allocator, cmd);
-        defer allocator.free(stripped_cmd);
-        const segments = try guard.splitSegments(allocator, stripped_cmd);
+        const segments = try guard.splitSegments(allocator, cmd);
         defer allocator.free(segments);
 
         for (segments) |seg| {
@@ -424,9 +422,7 @@ pub fn runAskReport(allocator: std.mem.Allocator, home: []const u8) !void {
                 },
                 else => continue,
             };
-            const stripped = try guard.stripHeredocBodies(allocator, cmd);
-            defer allocator.free(stripped);
-            const segs = try guard.splitSegments(allocator, stripped);
+            const segs = try guard.splitSegments(allocator, cmd);
             defer allocator.free(segs);
             for (segs) |seg| {
                 switch (guard.classifySegment(seg)) {
@@ -734,9 +730,7 @@ pub fn runSuggest(allocator: std.mem.Allocator, home: []const u8) !void {
             else => continue,
         };
 
-        const stripped_cmd = try guard.stripHeredocBodies(allocator, cmd);
-        defer allocator.free(stripped_cmd);
-        const segments = try guard.splitSegments(allocator, stripped_cmd);
+        const segments = try guard.splitSegments(allocator, cmd);
         defer allocator.free(segments);
 
         for (segments) |seg| {
@@ -990,9 +984,7 @@ pub fn runPatterns(allocator: std.mem.Allocator, home: []const u8, word: []const
                 else => continue,
             };
 
-            const stripped_cmd = try guard.stripHeredocBodies(allocator, cmd);
-            defer allocator.free(stripped_cmd);
-            const segments = try guard.splitSegments(allocator, stripped_cmd);
+            const segments = try guard.splitSegments(allocator, cmd);
             defer allocator.free(segments);
 
             for (segments) |seg| {
