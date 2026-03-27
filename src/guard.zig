@@ -40,9 +40,9 @@ pub fn stripQuotes(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
 /// Sanitize command for logging: blank env var values, quoted strings, and heredoc bodies.
 /// - Environment variables: VAR=secret → VAR=x
-/// - Single-quoted strings: '...' → ''
-/// - Double-quoted strings: "..." → ""
-/// - Heredoc bodies: blanked with spaces
+/// - Single-quoted strings: 'secret' → 'xxxxxx'
+/// - Double-quoted strings: "secret" → "xxxxxx"
+/// - Heredoc bodies: blanked with 'x' (newlines preserved)
 /// This prevents API keys, passwords, and sensitive data from leaking into logs.
 pub fn sanitizeCommand(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     var out = try allocator.dupe(u8, input);
@@ -126,7 +126,7 @@ pub fn sanitizeCommand(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
                         }
                     }
                     // Blank content, preserve newlines.
-                    if (out[j] != '\n') out[j] = ' ';
+                    if (out[j] != '\n') out[j] = 'x';
                     j += 1;
                 }
                 i = j;
@@ -138,7 +138,7 @@ pub fn sanitizeCommand(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
         if (out[i] == '\'') {
             i += 1;
             while (i < out.len and out[i] != '\'') {
-                out[i] = ' ';
+                out[i] = 'x';
                 i += 1;
             }
             if (i < out.len) i += 1; // skip closing quote
@@ -150,12 +150,12 @@ pub fn sanitizeCommand(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
             i += 1;
             while (i < out.len and out[i] != '"') {
                 if (out[i] == '\\' and i + 1 < out.len) {
-                    out[i] = ' ';
+                    out[i] = 'x';
                     i += 1;
-                    out[i] = ' ';
+                    out[i] = 'x';
                     i += 1;
                 } else {
-                    out[i] = ' ';
+                    out[i] = 'x';
                     i += 1;
                 }
             }
