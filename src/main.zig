@@ -8,21 +8,21 @@ const pipeline = @import("pipeline.zig");
 const project = @import("project.zig");
 const settings = @import("settings.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const allocator = init.gpa;
 
-    const home = std.posix.getenv("HOME") orelse "/tmp";
+    const home: []const u8 = if (std.c.getenv("HOME")) |v| std.mem.span(v) else "/tmp";
 
     // Read all stdin until EOF.
     var input_list: std.ArrayList(u8) = .empty;
     defer input_list.deinit(allocator);
     {
         var tmp: [4096]u8 = undefined;
-        const stdin_file = std.fs.File.stdin();
+        var rd_buf: [4096]u8 = undefined;
+        var stdin_rd = std.Io.File.stdin().reader(io, &rd_buf);
         while (true) {
-            const n = try stdin_file.read(&tmp);
+            const n = try stdin_rd.interface.readSliceShort(&tmp);
             if (n == 0) break;
             try input_list.appendSlice(allocator, tmp[0..n]);
         }
@@ -73,8 +73,8 @@ pub fn main() !void {
 
     // Load global allow patterns (empty slice if file does not exist).
     const global_allow_pats = blk: {
-        std.fs.accessAbsolute(allow_file, .{}) catch break :blk try allocator.alloc([]const u8, 0);
-        break :blk try patterns.loadPatterns(allocator, allow_file);
+        std.Io.Dir.accessAbsolute(io, allow_file, .{}) catch break :blk try allocator.alloc([]const u8, 0);
+        break :blk try patterns.loadPatterns(io, allocator, allow_file);
     };
     defer {
         for (global_allow_pats) |p| allocator.free(p);
@@ -84,7 +84,7 @@ pub fn main() !void {
     // Find project root and load per-project Claude settings allow patterns.
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
-    const maybe_project_root = try project.findProjectRoot(allocator, cwd, home);
+    const maybe_project_root = try project.findProjectRoot(io, allocator, cwd, home);
     defer if (maybe_project_root) |r| allocator.free(r);
 
     const project_allow_pats = blk: {
@@ -97,7 +97,7 @@ pub fn main() !void {
         for (&[_][]const u8{ "settings.json", "settings.local.json" }) |fname| {
             const path = try std.fs.path.join(allocator, &.{ root_path, ".claude", fname });
             defer allocator.free(path);
-            const file_pats = try settings.loadClaudeAllowPats(allocator, path);
+            const file_pats = try settings.loadClaudeAllowPats(io, allocator, path);
             defer {
                 for (file_pats) |p| allocator.free(p);
                 allocator.free(file_pats);
@@ -146,7 +146,7 @@ pub fn main() !void {
         if (decision == .log) {
             const post_log = try std.fs.path.join(allocator, &.{ home, ".local/var/btg.post.log.jsonl" });
             defer allocator.free(post_log);
-            log_mod.appendEntry(allocator, post_log, command_sanitized, "post: ran", maybe_project_root) catch {};
+            log_mod.appendEntry(io, allocator, post_log, command_sanitized, "post: ran", maybe_project_root) catch {};
         }
 
         // PostToolUse hooks must produce no stdout output.
@@ -158,7 +158,7 @@ pub fn main() !void {
     // Build deny path and load deny patterns.
     const deny_file = try std.fs.path.join(allocator, &.{ home, ".local/etc/btg.deny" });
     defer allocator.free(deny_file);
-    const deny_pats = try patterns.loadPatterns(allocator, deny_file);
+    const deny_pats = try patterns.loadPatterns(io, allocator, deny_file);
     defer {
         for (deny_pats) |p| allocator.free(p);
         allocator.free(deny_pats);
@@ -169,22 +169,22 @@ pub fn main() !void {
     const allow_log = try std.fs.path.join(allocator, &.{ home, ".local/var/btg.allow.log.jsonl" });
     defer allocator.free(allow_log);
 
-    const decision = try pipeline.evaluate(allocator, command_sanitized, deny_pats, allow_pats, vibe.evaluate);
+    const decision = try pipeline.evaluate(io, allocator, command_sanitized, deny_pats, allow_pats, vibe.evaluate);
     defer decision.deinit(allocator);
 
     switch (decision) {
         .allow_fast => {
-            log_mod.appendEntry(allocator, allow_log, command_sanitized, "", maybe_project_root) catch {};
-            try output.allow();
+            log_mod.appendEntry(io, allocator, allow_log, command_sanitized, "", maybe_project_root) catch {};
+            try output.allow(io);
         },
         .allow_vibe => {
-            log_mod.appendEntry(allocator, vibe_log, command_sanitized, "vibe: safe", maybe_project_root) catch {};
-            try output.allow();
+            log_mod.appendEntry(io, allocator, vibe_log, command_sanitized, "vibe: safe", maybe_project_root) catch {};
+            try output.allow(io);
         },
-        .deny => |reason| try output.deny(allocator, reason),
+        .deny => |reason| try output.deny(io, allocator, reason),
         .ask => |reason| {
-            log_mod.appendEntry(allocator, vibe_log, command_sanitized, reason, maybe_project_root) catch {};
-            try output.ask(allocator, reason);
+            log_mod.appendEntry(io, allocator, vibe_log, command_sanitized, reason, maybe_project_root) catch {};
+            try output.ask(io, allocator, reason);
         },
     }
 }

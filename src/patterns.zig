@@ -5,14 +5,11 @@ const c = @cImport({
 
 /// Load a pattern file: skip blank lines and lines starting with '#'.
 /// Returns owned slice of owned pattern strings.
-pub fn loadPatterns(allocator: std.mem.Allocator, path: []const u8) ![][]const u8 {
-    const file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+pub fn loadPatterns(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![][]const u8 {
+    const contents = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return try allocator.alloc([]const u8, 0),
         else => return err,
     };
-    defer file.close();
-
-    const contents = try file.readToEndAlloc(allocator, 1 << 20);
     defer allocator.free(contents);
 
     var list: std.ArrayList([]const u8) = .empty;

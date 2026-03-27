@@ -645,7 +645,7 @@ pub fn splitWrapper(seg: []const u8) ?WrapperSplit {
         const inner_start_shell = i;
         if (inner_start_shell >= seg.len) return null;
         return .{
-            .wrapper_part = std.mem.trimRight(u8, seg[0..inner_start_shell], " \t"),
+            .wrapper_part = std.mem.trimEnd(u8, seg[0..inner_start_shell], " \t"),
             .inner_part = seg[inner_start_shell..],
             .implicit = true,
         };
@@ -803,7 +803,7 @@ pub fn splitWrapper(seg: []const u8) ?WrapperSplit {
     if (inner_start >= seg.len) return null;
 
     return .{
-        .wrapper_part = std.mem.trimRight(u8, seg[0..inner_start], " \t"),
+        .wrapper_part = std.mem.trimEnd(u8, seg[0..inner_start], " \t"),
         .inner_part = seg[inner_start..],
     };
 }
@@ -859,7 +859,7 @@ pub fn classifySegment(seg: []const u8) SegmentClass {
 
         const first_end = std.mem.indexOfAny(u8, s, " \t") orelse s.len;
         const first = s[0..first_end];
-        const rest = if (first_end < s.len) std.mem.trimLeft(u8, s[first_end..], " \t") else "";
+        const rest = if (first_end < s.len) std.mem.trimStart(u8, s[first_end..], " \t") else "";
 
         // Shell comments.
         if (first[0] == '#') return .shell_structure;

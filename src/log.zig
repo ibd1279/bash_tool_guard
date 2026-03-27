@@ -187,8 +187,9 @@ fn formatTimestamp(allocator: std.mem.Allocator, unix_secs: i64) ![]u8 {
     });
 }
 
-pub fn appendEntry(allocator: std.mem.Allocator, path: []const u8, cmd: []const u8, reason: []const u8, project_root: ?[]const u8) !void {
-    const ts = try formatTimestamp(allocator, std.time.timestamp());
+pub fn appendEntry(io: std.Io, allocator: std.mem.Allocator, path: []const u8, cmd: []const u8, reason: []const u8, project_root: ?[]const u8) !void {
+    const ts_now = try std.Io.Clock.real.now(io);
+    const ts = try formatTimestamp(allocator, ts_now.toSeconds());
     defer allocator.free(ts);
 
     // Command is already sanitized by the hook (env vars, quotes, heredocs are blanked).
@@ -217,9 +218,9 @@ pub fn appendEntry(allocator: std.mem.Allocator, path: []const u8, cmd: []const 
 
     // Open with O_APPEND for POSIX atomic-append semantics (no seekFromEnd race).
     const flags = std.posix.O{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true };
-    const fd = try std.posix.open(path, flags, 0o644);
-    const file = std.fs.File{ .handle = fd };
-    defer file.close();
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, flags, 0o644);
+    const file = std.Io.File{ .handle = fd };
+    defer file.close(io);
 
-    try file.writeAll(line);
+    try file.writeStreamingAll(io, line);
 }

@@ -57,8 +57,6 @@ pub fn build(b: *std.Build) void {
     //
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
-    const yazap = b.dependency("yazap", .{});
-
     const exe = b.addExecutable(.{
         .name = "bash_tool_guard",
         .root_module = b.createModule(.{
@@ -66,9 +64,6 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .imports = &.{
-                .{ .name = "yazap", .module = yazap.module("yazap") },
-            },
         }),
     });
 

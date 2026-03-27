@@ -39,18 +39,16 @@ fn failResult(allocator: std.mem.Allocator) !VibeResult {
 
 /// Spawn vibe with an arbitrary prompt and return the full trimmed stdout.
 /// Caller owns the returned slice. On any error returns an empty owned slice.
-pub fn query(allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
-    var child = std.process.Child.init(
-        &.{ "vibe", "-p", prompt, "--max-turns", "1" },
-        allocator,
-    );
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return allocator.dupe(u8, "");
+pub fn query(io: std.Io, allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "vibe", "-p", prompt, "--max-turns", "1" },
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .ignore,
+    }) catch return allocator.dupe(u8, "");
 
     const stdout_file = child.stdout orelse {
-        _ = child.wait() catch {};
+        child.kill(io);
         return allocator.dupe(u8, "");
     };
 
@@ -60,46 +58,45 @@ pub fn query(allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
         .revents = 0,
     }};
     const ready = std.posix.poll(&pollfds, 30_000) catch {
-        _ = std.posix.kill(child.id, std.posix.SIG.KILL) catch {};
-        _ = child.wait() catch {};
+        _ = std.posix.kill(child.id.?, std.posix.SIG.KILL) catch {};
+        _ = child.wait(io) catch {};
         return allocator.dupe(u8, "");
     };
     if (ready == 0) {
-        _ = std.posix.kill(child.id, std.posix.SIG.KILL) catch {};
-        _ = child.wait() catch {};
+        _ = std.posix.kill(child.id.?, std.posix.SIG.KILL) catch {};
+        _ = child.wait(io) catch {};
         return allocator.dupe(u8, "");
     }
 
-    const bytes = stdout_file.readToEndAlloc(allocator, 65536) catch {
-        _ = child.wait() catch {};
+    var rd_buf: [4096]u8 = undefined;
+    var file_rd = stdout_file.reader(io, &rd_buf);
+    const bytes = file_rd.interface.allocRemaining(allocator, .unlimited) catch {
+        _ = child.wait(io) catch {};
         return allocator.dupe(u8, "");
     };
-    _ = child.wait() catch {};
+    _ = child.wait(io) catch {};
     return bytes; // caller owns
 }
 
 /// Spawn vibe and parse response. On any error, returns safe=false, explanation="Failed to evaluate command".
-pub fn evaluate(allocator: std.mem.Allocator, command: []const u8) !VibeResult {
+pub fn evaluate(io: std.Io, allocator: std.mem.Allocator, command: []const u8) !VibeResult {
     const prompt = std.fmt.allocPrint(allocator, "{s}{s}", .{ PROMPT_PREFIX, command }) catch {
         return failResult(allocator);
     };
     defer allocator.free(prompt);
 
-    var child = std.process.Child.init(
-        &.{ "vibe", "-p", prompt, "--max-turns", "1" },
-        allocator,
-    );
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-
-    child.spawn() catch {
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "vibe", "-p", prompt, "--max-turns", "1" },
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .ignore,
+    }) catch {
         return failResult(allocator);
     };
 
     // Read stdout from the pipe
     const stdout_file = child.stdout orelse {
-        _ = child.wait() catch {};
+        child.kill(io);
         return failResult(allocator);
     };
 
@@ -110,23 +107,25 @@ pub fn evaluate(allocator: std.mem.Allocator, command: []const u8) !VibeResult {
         .revents = 0,
     }};
     const ready = std.posix.poll(&pollfds, 30_000) catch {
-        _ = std.posix.kill(child.id, std.posix.SIG.KILL) catch {};
-        _ = child.wait() catch {};
+        _ = std.posix.kill(child.id.?, std.posix.SIG.KILL) catch {};
+        _ = child.wait(io) catch {};
         return failResult(allocator);
     };
     if (ready == 0) {
-        _ = std.posix.kill(child.id, std.posix.SIG.KILL) catch {};
-        _ = child.wait() catch {};
+        _ = std.posix.kill(child.id.?, std.posix.SIG.KILL) catch {};
+        _ = child.wait(io) catch {};
         return failResult(allocator);
     }
 
-    const stdout_bytes = stdout_file.readToEndAlloc(allocator, 16384) catch {
-        _ = child.wait() catch {};
+    var rd_buf: [4096]u8 = undefined;
+    var file_rd = stdout_file.reader(io, &rd_buf);
+    const stdout_bytes = file_rd.interface.allocRemaining(allocator, .unlimited) catch {
+        _ = child.wait(io) catch {};
         return failResult(allocator);
     };
     defer allocator.free(stdout_bytes);
 
-    _ = child.wait() catch {};
+    _ = child.wait(io) catch {};
 
     // Use only the first line; ignore anything after a newline.
     const newline_pos = std.mem.indexOfScalar(u8, stdout_bytes, '\n');

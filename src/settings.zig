@@ -20,14 +20,14 @@ pub fn bashPatternToEre(allocator: std.mem.Allocator, entry: []const u8) !?[]u8 
 /// Load ERE allow patterns derived from Bash(...) entries in a Claude Code
 /// settings JSON file (permissions.allow).  Returns an owned slice of owned
 /// strings.  Silently returns empty on missing file or parse error.
-pub fn loadClaudeAllowPats(allocator: std.mem.Allocator, settings_path: []const u8) ![][]const u8 {
+pub fn loadClaudeAllowPats(io: std.Io, allocator: std.mem.Allocator, settings_path: []const u8) ![][]const u8 {
     var pats: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (pats.items) |p| allocator.free(p);
         pats.deinit(allocator);
     }
 
-    const data = std.fs.cwd().readFileAlloc(allocator, settings_path, 1 << 20) catch
+    const data = std.Io.Dir.cwd().readFileAlloc(io, settings_path, allocator, .unlimited) catch
         return pats.toOwnedSlice(allocator);
     defer allocator.free(data);
 
