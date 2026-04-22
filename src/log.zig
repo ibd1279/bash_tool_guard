@@ -188,7 +188,7 @@ fn formatTimestamp(allocator: std.mem.Allocator, unix_secs: i64) ![]u8 {
 }
 
 pub fn appendEntry(io: std.Io, allocator: std.mem.Allocator, path: []const u8, cmd: []const u8, reason: []const u8, project_root: ?[]const u8) !void {
-    const ts_now = try std.Io.Clock.real.now(io);
+    const ts_now = std.Io.Clock.real.now(io);
     const ts = try formatTimestamp(allocator, ts_now.toSeconds());
     defer allocator.free(ts);
 
@@ -219,7 +219,7 @@ pub fn appendEntry(io: std.Io, allocator: std.mem.Allocator, path: []const u8, c
     // Open with O_APPEND for POSIX atomic-append semantics (no seekFromEnd race).
     const flags = std.posix.O{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true };
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, flags, 0o644);
-    const file = std.Io.File{ .handle = fd };
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
     defer file.close(io);
 
     try file.writeStreamingAll(io, line);

@@ -126,7 +126,7 @@ test "findMatch: returns first matching pattern" {
     const pats: []const []const u8 = &.{ "^foo\\b", "^git\\b" };
     const matched = try findMatch(allocator, pats, "git status");
     try std.testing.expect(matched != null);
-    try std.testing.expectEqualStrings("^git\\b", matched.?);
+    try std.testing.expectEqualSlices(u8, "^git\\b", matched.?);
 }
 
 test "findMatch: returns null when no pattern matches" {

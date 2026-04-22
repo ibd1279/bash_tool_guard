@@ -68,7 +68,7 @@ fn appendPatternFile(io: std.Io, path: []const u8, pattern: []const u8) !void {
     }
     const flags = std.posix.O{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true };
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, flags, 0o644);
-    const file = std.Io.File{ .handle = fd };
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
     defer file.close(io);
     try file.writeStreamingAll(io, pattern);
     try file.writeStreamingAll(io, "\n");
@@ -664,7 +664,7 @@ pub fn runSuggest(io: std.Io, allocator: std.mem.Allocator, home: []const u8) !v
     const out = &stdout_bw.interface;
 
     // 1. Find project root.
-    const cwd = try std.process.getCwdAlloc(allocator);
+    const cwd = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd);
 
     const project_root = (try project.findProjectRoot(io, allocator, cwd, home)) orelse {

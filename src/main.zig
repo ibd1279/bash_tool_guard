@@ -82,7 +82,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // Find project root and load per-project Claude settings allow patterns.
-    const cwd = try std.process.getCwdAlloc(allocator);
+    const cwd = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd);
     const maybe_project_root = try project.findProjectRoot(io, allocator, cwd, home);
     defer if (maybe_project_root) |r| allocator.free(r);
