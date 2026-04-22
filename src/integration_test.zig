@@ -9,25 +9,8 @@ const log_mod = @import("log.zig");
 // ---------------------------------------------------------------------------
 // Output module tests
 // ---------------------------------------------------------------------------
-
-test "output.allow: executes without error" {
-    // Test that allow() produces output without error
-    try output.allow(testing.io);
-}
-
-test "output.deny: executes without error" {
-    const allocator = testing.allocator;
-    
-    // Test that deny() produces output without error
-    try output.deny(testing.io, allocator, "test denial reason");
-}
-
-test "output.ask: executes without error" {
-    const allocator = testing.allocator;
-    
-    // Test that ask() produces output without error
-    try output.ask(testing.io, allocator, "test ask reason");
-}
+// Note: output.* functions write to stdout and are tested via integration tests
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Settings module tests

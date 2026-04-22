@@ -1654,8 +1654,6 @@ test "sanitizeCommand: inline heredoc" {
     const input = "zig <<'EOF' content EOF";
     const result = try sanitizeCommand(allocator, input);
     defer allocator.free(result);
-    std.debug.print("Input:  {s}\n", .{input});
-    std.debug.print("Result: {s}\n", .{result});
     // The content between <<'EOF' and EOF should be blanked
     try std.testing.expect(std.mem.indexOf(u8, result, "content") == null);
 }
