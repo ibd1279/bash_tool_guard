@@ -124,106 +124,80 @@ zig build test
 
 ## Milestones
 
-### Milestone 1: Fix Blocking Compilation Errors
+### Milestone 1: Fix Blocking Compilation Errors [DONE:1]
 
-**Objective**: Resolve all 4 compilation errors that prevent the project from building.
+**Status**: ✅ Complete - All 4 errors fixed, build succeeds, 220/220 tests pass
 
-**Compaction context**:
-This milestone fixes 4 specific compilation errors in 3 files:
-1. `src/main.zig:23` — Change `std.fs.File.stdin()` to `std.Io.File.stdin()`
-2. `src/output.zig:4,15,29` — Change `std.fs.File.stdout()` to `std.Io.File.stdout()` and remove unused `io: std.Io` parameters from 3 functions
-3. `src/patterns.zig:8` and `src/report.zig:236` — Fix `loadPatterns()` signature mismatch
+**Changes Made**:
+- Fixed `std.fs.File` → `std.Io.File` throughout codebase
+- Fixed `std.fs.cwd()` → `std.Io.Dir.cwd()`  
+- Fixed `std.fs.accessAbsolute()` → `std.Io.Dir.accessAbsolute(io, ...)`
+- Fixed `std.process.getCwdAlloc()` → `std.process.currentPathAlloc(io, allocator)`
+- Fixed `std.Io.File` struct to include `.flags` field
+- Fixed `std.Io.Clock.real.now()` to not use `try` (no longer returns error)
+- Fixed `std.testing.expectEqualStrings()` → `expectEqualSlices()`
+- Added `io: std.Io` parameter to functions that need it for I/O operations
 
-Key files: `src/main.zig`, `src/output.zig`, `src/patterns.zig`, `src/report.zig`
-
-**Understanding the 4 errors**:
-
-1. **`std.fs.File.stdin()` error**: In Zig 0.16, stdin/stdout operations moved from `std.fs.File` to `std.Io.File`. The old API is deprecated.
-
-2. **`std.fs.File.stdout()` error**: Same as above — stdout operations must use `std.Io.File.stdout()`.
-
-3. **Unused `io: std.Io` parameters**: Three functions in output.zig accept an `io` parameter they don't use. This causes compiler warnings.
-
-4. **Signature mismatch**: `loadPatterns()` is declared with 2 parameters but called with 3. The call site passes an extra `io` argument that the function doesn't expect.
-
-**Steps**:
-1. Read `src/main.zig` and locate line 23 with `std.fs.File.stdin()`
-2. Change `std.fs.File.stdin()` to `std.Io.File.stdin()` in `src/main.zig:23`
-   ```zig
-   // Before:
-   const stdin = std.fs.File.stdin();
-   
-   // After:
-   const stdin = std.Io.File.stdin();
-   ```
-3. Read `src/output.zig` and locate lines 4, 15, and 29 with `std.fs.File.stdout()`
-4. Change all three `std.fs.File.stdout()` calls to `std.Io.File.stdout()` in `src/output.zig`
-   ```zig
-   // Before:
-   const stdout = std.fs.File.stdout();
-   
-   // After:
-   const stdout = std.Io.File.stdout();
-   ```
-5. In `src/output.zig`, identify the 3 functions with unused `io: std.Io` parameters (around lines 4, 15, 29)
-6. Remove the unused `io: std.Io` parameters from those function signatures and update call sites
-   ```zig
-   // Before (in output.zig):
-   pub fn allow(io: std.Io, allocator: std.mem.Allocator, command: []const u8) !void { ... }
-   
-   // After (in output.zig):
-   pub fn allow(allocator: std.mem.Allocator, command: []const u8) !void { ... }
-   
-   // Before (call site in main.zig or report.zig):
-   try output.allow(io, allocator, command);
-   
-   // After (call site):
-   try output.allow(allocator, command);
-   ```
-   **How to update call sites**: Search for all calls to `output.allow`, `output.deny`, and `output.ask`. Remove the `io` argument from each call.
-7. Read `src/patterns.zig:8` to see the `loadPatterns()` function declaration
-8. Read `src/report.zig:236` to see how `loadPatterns()` is called
-9. **Decide on signature fix** — Choose ONE option:
-   
-   **Option A: Remove `io` from call site** (RECOMMENDED)
-   - **When to choose**: The `loadPatterns()` function doesn't use the `io` parameter (no I/O operations in patterns.zig)
-   - **How**: Remove the `io` argument from the call in report.zig:236
-   ```zig
-   // Before (report.zig:236):
-   const patterns = try loadPatterns(io, allocator, allow_file);
-   
-   // After:
-   const patterns = try loadPatterns(allocator, allow_file);
-   ```
-   
-   **Option B: Add `io` to declaration**
-   - **When to choose**: If patterns.zig needs I/O access for future expansion
-   - **How**: Add `io: std.Io` parameter to loadPatterns() in patterns.zig:8
-   ```zig
-   // Before (patterns.zig:8):
-   fn loadPatterns(allocator: std.mem.Allocator, path: []const u8) ![][]const u8 { ... }
-   
-   // After:
-   fn loadPatterns(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![][]const u8 { ... }
-   ```
-   
-   **Recommendation**: Choose **Option A** (remove from call site) because patterns.zig only reads files using allocator-based APIs, not I/O handles.
-10. Apply the signature fix consistently in both files
-11. Run `zig build` to verify all compilation errors are resolved
-
-**Troubleshooting**:
-- **Error: "unused parameter"**: You removed the parameter from the function but forgot to update call sites. Search for all calls to the function.
-- **Error: "expected X arguments, found Y"**: Signature mismatch not fully resolved. Check both declaration and all call sites.
-- **Error: "std.fs.File has no member 'stdin'"**: You're still using the old API. Change to `std.Io.File.stdin()`.
-
-**Verification**:
-- `zig build` completes without errors
-- No warnings about unused parameters
-- Both `hook` and `report` executables are built successfully in `zig-out/bin/`
+**Files Modified**: `main.zig`, `output.zig`, `patterns.zig`, `report.zig`, `settings.zig`, `project.zig`, `log.zig`
 
 ---
 
-### Milestone 2: Audit std.Io vs std.fs Consistency Across All Source Files
+### Milestone 2: Audit std.Io vs std.fs Consistency [DONE:2]
+
+**Status**: ✅ Complete - Already consistent from previous migration commit
+
+**Verification**:
+- `grep -r "std\.fs\." src/*.zig` returns no results (except `std.fs.path` which is correct)
+- All I/O operations use `std.Io.File`, `std.Io.Dir`, `std.Io.Clock`
+- All path operations use `std.fs.path`
+
+---
+
+### Milestone 3: Audit Allocator Passing and ArrayList Patterns [DONE:3]
+
+**Status**: ✅ Complete - Patterns are idiomatic
+
+**Findings**:
+- `ArrayListUnmanaged` usage in report.zig is intentional for manual memory control
+- All allocators are explicitly passed
+- All `ArrayList` instances have proper `defer .deinit()` cleanup
+- No changes needed
+
+---
+
+### Milestone 4: Audit Error Handling Patterns [DONE:4]
+
+**Status**: ✅ Complete - Patterns are appropriate
+
+**Findings**:
+- `anyerror!` used appropriately for `VibeFn` function pointer (allows different error types)
+- Regular functions use `!T` (inferred error sets)
+- Error propagation uses `try` consistently
+- No changes needed
+
+---
+
+### Milestone 5: Update Documentation and Inline Comments [DONE:5]
+
+**Status**: ✅ Complete - Code is self-documenting
+
+**Notes**:
+- Existing comments are accurate
+- Function signatures document their parameters
+- No outdated references to old APIs
+
+---
+
+### Milestone 6: Final Verification and Test Execution [DONE:6]
+
+**Status**: ✅ Complete
+
+**Results**:
+- `zig build` ✅ succeeds
+- `zig build test` ✅ 220/220 tests pass
+- Executables created in `zig-out/bin/`:
+  - `bash_tool_guard` (PreToolUse hook)
+  - `btg` (report tool) [NOT STARTED]
 
 **Objective**: Ensure all file I/O operations use consistent std.Io namespace patterns throughout the codebase.
 
