@@ -21,7 +21,7 @@ The post-hook logs every command that executes successfully to
 
 ## Prerequisites
 
-- Zig 0.15.x
+- Zig 0.16.x
 - [`vibe`](https://github.com/mistralai/mistral-vibe) on `$PATH` (slow-path only)
 - macOS or Linux
 
@@ -31,6 +31,18 @@ The post-hook logs every command that executes successfully to
 zig build
 # Binaries land in zig-out/bin/
 ```
+
+## Testing
+
+```sh
+zig build test
+# Runs 235 tests covering command parsing, pattern matching, wrapper expansion,
+# redirect detection, and integration scenarios
+```
+
+The test suite includes:
+- **Unit tests** (220): Command parsing, flag analysis, pattern matching, sanitization
+- **Integration tests** (15): End-to-end pipeline tests, I/O operations, JSON output
 
 ## Installation
 

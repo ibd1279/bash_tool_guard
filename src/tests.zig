@@ -8,4 +8,5 @@ comptime {
     _ = @import("process_info.zig");
     _ = @import("flags.zig");
     _ = @import("settings.zig");
+    _ = @import("integration_test.zig");
 }

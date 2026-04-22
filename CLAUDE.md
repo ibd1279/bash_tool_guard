@@ -4,12 +4,20 @@
 
 ```sh
 zig build
-zig build test
+zig build test  # 235 tests
 ```
 
 Binaries land in `zig-out/bin/`. No external dependencies except `libc` (linked
 via `build.zig`) and the `yazap` argument-parsing package (fetched by the build
 system).
+
+## Zig Version
+
+This project requires **Zig 0.16.x**. The codebase uses idiomatic Zig 0.16 patterns:
+- `std.Io.File`, `std.Io.Dir`, `std.Io.Clock` for I/O operations
+- `std.process.currentPathAlloc(io, allocator)` for cwd
+- Explicit `io: std.Io` parameter passing for I/O operations
+- `std.Io.File` struct initialization includes `.flags` field
 
 ## Source layout
 
@@ -29,6 +37,41 @@ system).
 | `src/report.zig` | `btg` binary: `ask`, `stale-allow`, `suggest`, `flush` views. |
 | `src/process_info.zig` | Reads `/proc/self/status` (Linux) or `sysctl` (macOS) for parent process info. |
 | `src/tests.zig` | Test root — imports all modules so their `test` blocks are compiled. |
+| `src/integration_test.zig` | Integration tests: output, settings, project detection, patterns, logging, end-to-end scenarios. |
+
+## Testing
+
+### Running tests
+
+```sh
+zig build test  # All 235 tests
+```
+
+### Test coverage
+
+- **guard.zig** (109 tests): Command parsing, heredoc handling, wrapper expansion, redirect detection
+- **flags.zig** (45 tests): Flag analysis for git, docker, kubectl, find, zig
+- **pipeline.zig** (40 tests): Decision pipeline, allow/deny/vibe flow
+- **integration_test.zig** (15 tests): End-to-end scenarios, I/O operations, JSON output
+- **log.zig** (13 tests): JSON escaping, environment variable sanitization
+- **patterns.zig** (9 tests): Regex pattern loading and matching
+- **process_info.zig** (4 tests): Process lookup parsing
+
+### Adding new tests
+
+1. **Unit tests**: Add `test "description"` blocks to the relevant module file
+2. **Integration tests**: Add to `src/integration_test.zig` for cross-module scenarios
+3. **Test I/O operations**: Use `testing.io` for the default Io instance
+4. **Test with temp files**: Note that `makeTempDir` is not available in Zig 0.16; use inline pattern arrays instead
+
+Example:
+```zig
+test "myFunction: handles edge case" {
+    const allocator = testing.allocator;
+    const result = try myFunction(testing.io, allocator, "input");
+    try testing.expectEqual(expected, result);
+}
+```
 
 ## Key invariants
 
