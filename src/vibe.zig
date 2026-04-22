@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("config");
 
 pub const VibeResult = struct {
     safe: bool,
@@ -40,8 +41,13 @@ fn failResult(allocator: std.mem.Allocator) !VibeResult {
 /// Spawn vibe with an arbitrary prompt and return the full trimmed stdout.
 /// Caller owns the returned slice. On any error returns an empty owned slice.
 pub fn query(io: std.Io, allocator: std.mem.Allocator, prompt: []const u8) ![]u8 {
+    const cmd = if (config.use_claude)
+        &.{ "claude", "-p", prompt, "--model", "haiku", "--output-format", "text" }
+    else
+        &.{ "vibe", "-p", prompt, "--max-turns", "1" };
+
     var child = std.process.spawn(io, .{
-        .argv = &.{ "vibe", "-p", prompt, "--max-turns", "1" },
+        .argv = cmd,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .ignore,
@@ -85,8 +91,13 @@ pub fn evaluate(io: std.Io, allocator: std.mem.Allocator, command: []const u8) !
     };
     defer allocator.free(prompt);
 
+    const cmd = if (config.use_claude)
+        &.{ "claude", "-p", prompt, "--model", "haiku", "--output-format", "text" }
+    else
+        &.{ "vibe", "-p", prompt, "--max-turns", "1" };
+
     var child = std.process.spawn(io, .{
-        .argv = &.{ "vibe", "-p", prompt, "--max-turns", "1" },
+        .argv = cmd,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .ignore,

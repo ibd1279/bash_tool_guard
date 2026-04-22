@@ -21,6 +21,13 @@ pub fn build(b: *std.Build) void {
     // target and optimize options) will be listed when running `zig build --help`
     // in this directory.
 
+    // Build flag to select AI backend for safety checks.
+    const use_claude = b.option(bool, "use-claude", "Use Claude (haiku) instead of vibe for AI safety checks") orelse false;
+
+    // Attach build options to the executable module.
+    const opts = b.addOptions();
+    opts.addOption(bool, "use_claude", use_claude);
+
     // This creates a module, which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
     // Zig modules are the preferred way of making Zig code available to consumers.
@@ -66,6 +73,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    exe.root_module.addOptions("config", opts);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -82,6 +90,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    report_exe.root_module.addOptions("config", opts);
     b.installArtifact(report_exe);
 
     // This creates a top level step. Top level steps have a name and can be
