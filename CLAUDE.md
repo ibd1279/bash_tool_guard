@@ -1,153 +1,61 @@
-# bash-tool-guard — development guide
+# bash-tool-guard
 
-## Build and test
+Claude Code PreToolUse/PostToolUse hooks for Bash command safety gating.
 
-```sh
-zig build
-zig build test  # 235 tests
-```
-
-Binaries land in `zig-out/bin/`. No external dependencies except `libc` (linked
-via `build.zig`) and the `yazap` argument-parsing package (fetched by the build
-system).
-
-## Zig Version
-
-This project requires **Zig 0.16.x**. The codebase uses idiomatic Zig 0.16 patterns:
-- `std.Io.File`, `std.Io.Dir`, `std.Io.Clock` for I/O operations
-- `std.process.currentPathAlloc(io, allocator)` for cwd
-- Explicit `io: std.Io` parameter passing for I/O operations
-- `std.Io.File` struct initialization includes `.flags` field
-
-## Source layout
-
-| File | Role |
-|------|------|
-| `src/main.zig` | PreToolUse hook entry point. Reads stdin JSON, runs the pipeline, writes Claude Code output. |
-| `src/post_tool.zig` | PostToolUse hook entry point. Logs clean executed commands to `btg.post.log.jsonl`. |
-| `src/pipeline.zig` | Three-stage deny/allow/vibe engine (`evaluate`) + PostToolUse classifier (`classifyForPost`). |
-| `src/settings.zig` | Shared helpers: `bashPatternToEre`, `loadClaudeAllowPats` — used by both hook binaries. |
-| `src/guard.zig` | Command parsing: segment splitting, quote stripping, wrapper expansion, redirect/substitution detection, heredoc stripping. |
-| `src/flags.zig` | Per-command flag rules (`find -exec`, `git push --force`, …). Add new rules here or use `/add-command-flags`. |
-| `src/patterns.zig` | ERE pattern loading and matching via POSIX `regexec`. |
-| `src/vibe.zig` | Slow-path: spawns `vibe -p <prompt>` and parses its one-line response. |
-| `src/log.zig` | JSONL append logging to `~/.local/var/btg.*.log.jsonl`. |
-| `src/output.zig` | Writes the Claude Code `hookSpecificOutput` JSON to stdout. |
-| `src/project.zig` | `findProjectRoot`: walks up from CWD looking for `.git`, stays under `$HOME`. |
-| `src/report.zig` | `btg` binary: `ask`, `stale-allow`, `suggest`, `flush` views. |
-| `src/process_info.zig` | Reads `/proc/self/status` (Linux) or `sysctl` (macOS) for parent process info. |
-| `src/tests.zig` | Test root — imports all modules so their `test` blocks are compiled. |
-| `src/integration_test.zig` | Integration tests: output, settings, project detection, patterns, logging, end-to-end scenarios. |
-
-## Testing
-
-### Running tests
+## Quick Commands
 
 ```sh
-zig build test  # All 235 tests
+zig build        # Build to zig-out/bin/
+zig build test   # Run 235 tests
+btg              # Report tool (ask, stale-allow, suggest, flush, init)
 ```
 
-### Test coverage
+## Architecture
 
-- **guard.zig** (109 tests): Command parsing, heredoc handling, wrapper expansion, redirect detection
-- **flags.zig** (45 tests): Flag analysis for git, docker, kubectl, find, zig
-- **pipeline.zig** (40 tests): Decision pipeline, allow/deny/vibe flow
-- **integration_test.zig** (15 tests): End-to-end scenarios, I/O operations, JSON output
-- **log.zig** (13 tests): JSON escaping, environment variable sanitization
-- **patterns.zig** (9 tests): Regex pattern loading and matching
-- **process_info.zig** (4 tests): Process lookup parsing
+**Three-stage decision pipeline:**
+1. **Deny** - `~/.local/etc/btg.deny` patterns block immediately
+2. **Allow** - `~/.local/etc/btg.allow` + per-project `Bash(*)` fast-path (zero AI)
+3. **Vibe** - LLM safety check for everything else (`safe` or `ask: <reason>`)
 
-### Adding new tests
+**Key invariants:**
+- Deny beats allow
+- Wrappers (sudo, timeout, env, nohup) are transparent — inner command is checked
+- Shell structure (if/then/fi, for/do/done, variable assignments) is skipped
+- Commands with `$(...)` or `>`, `>>` redirects bypass allow fast-path
+- Vibe unavailable → `ask: vibe unavailable`
 
-1. **Unit tests**: Add `test "description"` blocks to the relevant module file
-2. **Integration tests**: Add to `src/integration_test.zig` for cross-module scenarios
-3. **Test I/O operations**: Use `testing.io` for the default Io instance
-4. **Test with temp files**: Note that `makeTempDir` is not available in Zig 0.16; use inline pattern arrays instead
+## Adding Rules
 
-Example:
-```zig
-test "myFunction: handles edge case" {
-    const allocator = testing.allocator;
-    const result = try myFunction(testing.io, allocator, "input");
-    try testing.expectEqual(expected, result);
-}
+```sh
+# Add allow pattern
+btg allow '^mycmd\b'
+
+# Add deny pattern  
+btg deny 'dangerous.*pattern'
+
+# Populate project allow list from history
+btg suggest
 ```
 
-## Key invariants
+Or use Claude Code slash commands: `/add-command-flags`, `/add-wrapper`
 
-- **Zero AI on the fast path.** If every command segment matches the allow list,
-  the hook exits immediately with `allow` and logs to `btg.allow.log.jsonl`.
-  Vibe is never spawned.
-- **Deny before allow.** The deny list is checked first; a deny match exits
-  immediately regardless of allow patterns.
-- **Wrappers are transparent.** `sudo zig build`, `nohup npm start`, and
-  `env FOO=1 cargo test` all bucket the real executable, not the wrapper.
-- **Shell structure is skipped.** `if`/`then`/`fi`, `for`/`do`/`done`,
-  variable assignments like `FOO=bar`, and test builtins (`[`, `[[`, `test`)
-  are never matched against allow patterns.
-- **Substitution and unsafe redirects bypass the allow fast-path.** Commands
-  with `$(...)`, backticks, or output redirects (`>`, `>>`) go straight to vibe.
-- **Vibe fails to ask.** If `vibe` fails to spawn or times out (30 s), the
-  result is `ask: vibe unavailable` — the command already failed the allow list
-  and still needs review.
-
-## Decision flow
+## Log Files
 
 ```
-stdin JSON
-  │
-  ├─ deny list hit?  ──yes──> deny + exit
-  │
-  ├─ all segments in allow list AND no substitution AND no unsafe redirect?
-  │    └─ flag-level escalation check (find -exec, git push --force, …)
-  │         ├─ escalated ──────────────────────────────────────────> ask
-  │         └─ clean ──────────────────────────────────────────────> allow_fast
-  │
-  └─ vibe slow path
-       ├─ "safe" ──────────────────────────────────────────────────> allow_vibe
-       └─ "ask: <reason>" ─────────────────────────────────────────> ask
+~/.local/etc/btg.allow       # Global allow patterns (ERE)
+~/.local/etc/btg.deny        # Global deny patterns (ERE)
+~/.local/var/btg.allow.log.jsonl   # Fast-path commands
+~/.local/var/btg.vibe.log.jsonl    # Vibe-evaluated commands
+~/.local/var/btg.post.log.jsonl    # Successfully executed commands
 ```
 
-## Adding flag rules
-
-Use the `/add-command-flags` slash command.  It edits `src/flags.zig` and adds
-a new `CmdDef` entry (or a subcommand entry to an existing one) following the
-established pattern.
-
-## Adding wrapper support
-
-Use the `/add-wrapper` slash command. It edits the wrapper table in
-`src/guard.zig`.
-
-## Log format
-
-Every log entry is a single-line JSON object:
+## Hook Installation
 
 ```json
-{"cmd":"zig build test","reason":"vibe: safe","ts":"2025-01-15T10:30:00Z","project":"/home/you/my-project"}
-```
-
-The `project` field is omitted for entries logged before project detection was
-added.
-
-## report tool
-
-`btg` shares `src/project.zig` and `src/guard.zig` with the
-hook but has its own `main()` in `src/report.zig`. Run with no arguments for all
-views; pass one or more selector words (`ask`, `stale-allow`, `suggest`, `flush`,
-`init`, `allow <pattern>`, `deny <pattern>`) to run specific views.
-
-The `suggest` command reads `btg.post.log.jsonl` (commands that executed
-successfully and have no red flags) and writes `Bash(cmd *)` entries to
-`.claude/settings.local.json` in the current project, merging with any that
-already exist.
-
-## Pattern file locations
-
-```
-~/.local/etc/btg.allow    # global allow patterns (ERE, one per line)
-~/.local/etc/btg.deny     # global deny patterns  (ERE, one per line)
-~/.local/var/btg.allow.log.jsonl
-~/.local/var/btg.vibe.log.jsonl
-~/.local/var/btg.post.log.jsonl
+{
+  "hooks": {
+    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "/path/to/bash_tool_guard"}]}],
+    "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "/path/to/bash_tool_guard"}]}]
+  }
+}
 ```
